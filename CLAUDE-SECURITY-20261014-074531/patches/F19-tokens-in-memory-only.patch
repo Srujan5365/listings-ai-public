@@ -1,0 +1,40 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 6dc94d9..c222b5f 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -47,7 +47,7 @@ function App() {
+   const [accountModalTab, setAccountModalTab] = useState<AccountModalTab>('profile');
+   const [globalSearch, setGlobalSearch] = useState('');
+ 
+-  // On mount: restore session from localStorage if token exists
++  // On mount: check in-memory token — sessions do not survive page reload (tokens no longer persisted)
+   useEffect(() => {
+     const token = getAccessToken();
+     if (token) {
+diff --git a/frontend/src/api/client.ts b/frontend/src/api/client.ts
+index 184df59..f8341a7 100644
+--- a/frontend/src/api/client.ts
++++ b/frontend/src/api/client.ts
+@@ -1,20 +1,16 @@
+ const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api/v1';
+ 
+-let _accessToken: string | null = localStorage.getItem('access_token');
+-let _refreshToken: string | null = localStorage.getItem('refresh_token');
++let _accessToken: string | null = null;
++let _refreshToken: string | null = null;
+ 
+ export function setTokens(access: string, refresh: string) {
+   _accessToken = access;
+   _refreshToken = refresh;
+-  localStorage.setItem('access_token', access);
+-  localStorage.setItem('refresh_token', refresh);
+ }
+ 
+ export function clearTokens() {
+   _accessToken = null;
+   _refreshToken = null;
+-  localStorage.removeItem('access_token');
+-  localStorage.removeItem('refresh_token');
+ }
+ 
+ export function getAccessToken() {

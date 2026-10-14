@@ -1,0 +1,35 @@
+diff --git a/backend/app/api/v1/listings.py b/backend/app/api/v1/listings.py
+index 18a287d..7bacb23 100644
+--- a/backend/app/api/v1/listings.py
++++ b/backend/app/api/v1/listings.py
+@@ -177,7 +177,7 @@ async def resolve_validation(
+     db: AsyncSession = Depends(get_db),
+ ):
+     return await listing_service.resolve_validation(
+-        db, validation_id, current_user.id, body.resolution_note
++        db, listing_id, validation_id, current_user.id, body.resolution_note
+     )
+
+
+diff --git a/backend/app/services/listing_service.py b/backend/app/services/listing_service.py
+index 55fa848..76cf9dc 100644
+--- a/backend/app/services/listing_service.py
++++ b/backend/app/services/listing_service.py
+@@ -245,12 +245,16 @@ async def get_listing_validations(
+
+ async def resolve_validation(
+     db: AsyncSession,
++    listing_id: uuid.UUID,
+     validation_id: uuid.UUID,
+     resolver_id: uuid.UUID,
+     resolution_note: str,
+ ) -> ValidationResult:
+     result = await db.execute(
+-        select(ValidationResult).where(ValidationResult.id == validation_id)
++        select(ValidationResult).where(
++            ValidationResult.id == validation_id,
++            ValidationResult.listing_id == listing_id,
++        )
+     )
+     val = result.scalar_one_or_none()
+     if val is None:

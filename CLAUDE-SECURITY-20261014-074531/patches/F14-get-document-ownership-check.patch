@@ -1,0 +1,16 @@
+diff --git a/backend/app/api/v1/documents.py b/backend/app/api/v1/documents.py
+index b59bf71..1d10732 100644
+--- a/backend/app/api/v1/documents.py
++++ b/backend/app/api/v1/documents.py
+@@ -59,7 +59,10 @@ async def get_document(
+     db: AsyncSession = Depends(get_db),
+ ):
+     result = await db.execute(
+-        select(ListingDocument).where(ListingDocument.id == document_id)
++        select(ListingDocument).where(
++            ListingDocument.id == document_id,
++            ListingDocument.uploaded_by == current_user.id,
++        )
+     )
+     doc = result.scalar_one_or_none()
+     if doc is None:

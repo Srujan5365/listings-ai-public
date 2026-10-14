@@ -1,0 +1,24 @@
+diff --git a/backend/app/api/v1/documents.py b/backend/app/api/v1/documents.py
+index b59bf71..62dbfcd 100644
+--- a/backend/app/api/v1/documents.py
++++ b/backend/app/api/v1/documents.py
+@@ -1,7 +1,7 @@
+ import uuid
+ 
+ from fastapi import APIRouter, Depends, HTTPException, Query, status
+-from sqlalchemy import func, select
++from sqlalchemy import func, or_, select
+ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ from app.core.database import get_db
+@@ -29,7 +29,9 @@ async def list_documents(
+     current_user=Depends(get_current_user),
+     db: AsyncSession = Depends(get_db),
+ ):
+-    q = select(ListingDocument)
++    q = select(ListingDocument).where(
++        or_(ListingDocument.uploaded_by == current_user.id, ListingDocument.uploaded_by.is_(None))
++    )
+     if tab and tab in _TAB_STATUS:
+         q = q.where(ListingDocument.status == _TAB_STATUS[tab])
+     if listing_id:

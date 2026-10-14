@@ -1,0 +1,9 @@
+diff --git a/backend/.dockerignore b/backend/.dockerignore
+new file mode 100644
+index 0000000..66b400c
+--- /dev/null
++++ b/backend/.dockerignore
+@@ -0,0 +1,3 @@
++.env
++*.env
++.env.*

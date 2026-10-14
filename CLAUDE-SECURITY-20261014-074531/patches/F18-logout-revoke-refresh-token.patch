@@ -1,0 +1,81 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 6dc94d9..36307d3 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -11,8 +11,8 @@ import { ActivityPage } from './components/activity/ActivityPage';
+ import { InboxPage } from './components/inbox/InboxPage';
+ import { DocumentsPage } from './components/documents/DocumentsPage';
+ import type { AuthUser } from './api/auth';
+-import { getMe } from './api/auth';
+-import { clearTokens, getAccessToken } from './api/client';
++import { getMe, logout } from './api/auth';
++import { clearTokens, getAccessToken, getRefreshToken } from './api/client';
+ 
+ class ErrorBoundary extends Component<
+   { children: React.ReactNode },
+@@ -62,11 +62,17 @@ function App() {
+ 
+   // Listen for session expiry events from the API client
+   useEffect(() => {
+-    const handler = () => {
++    const handler = (event: Event) => {
++      const refreshToken = (event as CustomEvent<{ refreshToken: string | null }>).detail?.refreshToken;
+       setUser(null);
+-      clearTokens();
+       setActiveNav('Home');
+       setSessionExpired(true);
++      if (refreshToken) {
++        // Attempt to revoke the token server-side; logout() calls clearTokens() in its finally block
++        logout(refreshToken).catch(() => clearTokens());
++      } else {
++        clearTokens();
++      }
+     };
+     window.addEventListener('auth:logout', handler);
+     return () => window.removeEventListener('auth:logout', handler);
+@@ -78,9 +84,16 @@ function App() {
+   };
+ 
+   const handleLogout = () => {
+-    clearTokens();
++    const refreshToken = getRefreshToken();
+     setUser(null);
+     setActiveNav('Home');
++    if (refreshToken) {
++      // logout() sends DELETE to /auth/logout to revoke the token server-side,
++      // then calls clearTokens() in its finally block regardless of network outcome.
++      logout(refreshToken).catch(() => clearTokens());
++    } else {
++      clearTokens();
++    }
+   };
+ 
+   if (!authChecked) {
+diff --git a/frontend/src/api/client.ts b/frontend/src/api/client.ts
+index 184df59..6bf70b2 100644
+--- a/frontend/src/api/client.ts
++++ b/frontend/src/api/client.ts
+@@ -21,6 +21,10 @@ export function getAccessToken() {
+   return _accessToken;
+ }
+ 
++export function getRefreshToken() {
++  return _refreshToken;
++}
++
+ async function refreshAccessToken(): Promise<boolean> {
+   if (!_refreshToken) return false;
+   try {
+@@ -56,10 +60,11 @@ export async function apiFetch<T = unknown>(
+   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+ 
+   if (res.status === 401 && retry) {
++    const expiredRefreshToken = _refreshToken;
+     const refreshed = await refreshAccessToken();
+     if (refreshed) return apiFetch<T>(path, options, false);
+     clearTokens();
+-    window.dispatchEvent(new Event('auth:logout'));
++    window.dispatchEvent(new CustomEvent('auth:logout', { detail: { refreshToken: expiredRefreshToken } }));
+     throw new Error('Session expired');
+   }
+ 

@@ -1,0 +1,13 @@
+diff --git a/backend/app/core/security.py b/backend/app/core/security.py
+index 3a763cc..e5373fa 100644
+--- a/backend/app/core/security.py
++++ b/backend/app/core/security.py
+@@ -71,7 +71,7 @@ async def get_current_user(
+         headers={"WWW-Authenticate": "Bearer"},
+     )
+     payload = decode_token(token)
+-    if payload is None or payload.get("type") != "access":
++    if payload is None or payload.get("type") != "access" or payload.get("purpose") is not None:
+         raise credentials_exception
+     user_id: str = payload.get("sub")
+     if user_id is None:

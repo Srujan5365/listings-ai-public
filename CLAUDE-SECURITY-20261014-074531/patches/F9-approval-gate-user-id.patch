@@ -1,0 +1,24 @@
+diff --git a/backend/app/services/approval_gate.py b/backend/app/services/approval_gate.py
+index 8bccc01..cf146d7 100644
+--- a/backend/app/services/approval_gate.py
++++ b/backend/app/services/approval_gate.py
+@@ -19,6 +19,7 @@ async def require_approval(
+             Approval.listing_id == listing_id,
+             Approval.action_type == action_type,
+             Approval.status == "approved",
++            Approval.requested_by == user_id,
+         )
+     )
+     approval = result.scalar_one_or_none()
+diff --git a/backend/tests/test_workflow.py b/backend/tests/test_workflow.py
+index 587ce9b..936e223 100644
+--- a/backend/tests/test_workflow.py
++++ b/backend/tests/test_workflow.py
+@@ -57,6 +57,6 @@ async def test_approval_gate_passes_with_approval(db_session: AsyncSession):
+     await db_session.flush()
+
+     result = await approval_gate.require_approval(
+-        db_session, listing.id, "asana_write", approver_id
++        db_session, listing.id, "asana_write", requester_id
+     )
+     assert result.status == "approved"

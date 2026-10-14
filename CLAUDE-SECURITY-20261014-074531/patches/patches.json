@@ -1,0 +1,179 @@
+{
+  "generated": "2026-10-14",
+  "patch_base": "3f176b2185036700760502492e4773fc5d5f830a",
+  "scan_session": "CLAUDE-SECURITY-20261014-074531",
+  "summary": {
+    "total_findings": 19,
+    "declined": 3,
+    "patched": 16,
+    "declined_ids": ["F1", "F2", "F6"],
+    "declined_reason": "All three target backend/.env which was never committed to version control (excluded by .gitignore); CONFIRMED=false at this revision"
+  },
+  "patches": [
+    {
+      "id": "F3",
+      "title": "Password reset token has no dedicated type claim — type confusion allows access tokens to reset passwords",
+      "severity": "HIGH",
+      "cwe": "CWE-287/CWE-640/CWE-613",
+      "file": "backend/app/core/security.py",
+      "patch": "F3-password-reset-token-type.patch",
+      "doc": "F3-password-reset-token-type.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F4",
+      "title": "get_current_user accepts any JWT regardless of purpose claim",
+      "severity": "HIGH",
+      "cwe": "CWE-287",
+      "file": "backend/app/core/security.py",
+      "patch": "F4-get-current-user-purpose-rejection.patch",
+      "doc": "F4-get-current-user-purpose-rejection.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F5",
+      "title": "OAuth state parameter has no HMAC — forged state enables token injection into arbitrary user accounts",
+      "severity": "HIGH",
+      "cwe": "CWE-352/CWE-330",
+      "file": "backend/app/api/v1/integrations.py",
+      "patch": "F5-oauth-hmac-signed-state.patch",
+      "doc": "F5-oauth-hmac-signed-state.md",
+      "note": "Addresses the same root vulnerability as F11. Apply one or the other — not both.",
+      "status": "EARNED"
+    },
+    {
+      "id": "F7",
+      "title": "Password reset token can be replayed after first use — no JTI blocklist",
+      "severity": "HIGH",
+      "cwe": "CWE-613",
+      "file": "backend/app/api/v1/auth.py",
+      "patch": "F7-password-reset-jti-blocklist.patch",
+      "doc": "F7-password-reset-jti-blocklist.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F8",
+      "title": "JWT tokens stored in localStorage — readable by any same-origin script (XSS)",
+      "severity": "HIGH",
+      "cwe": "CWE-312/CWE-922",
+      "file": "frontend/src/api/client.ts",
+      "patch": "F8-tokens-in-memory-only.patch",
+      "doc": "F8-tokens-in-memory-only.md",
+      "note": "Addresses the same root vulnerability as F19. Apply one or the other — not both.",
+      "status": "EARNED"
+    },
+    {
+      "id": "F9",
+      "title": "require_approval IDOR — approval gate does not verify requested_by matches current user",
+      "severity": "HIGH",
+      "cwe": "CWE-639",
+      "file": "backend/app/api/v1/approval_gate.py",
+      "patch": "F9-approval-gate-user-id.patch",
+      "doc": "F9-approval-gate-user-id.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F10",
+      "title": "gmail_send fetches Message by UUID with no ownership check (IDOR)",
+      "severity": "HIGH",
+      "cwe": "CWE-639",
+      "file": "backend/app/api/v1/integrations.py",
+      "patch": "F10-gmail-send-ownership-check.patch",
+      "doc": "F10-gmail-send-ownership-check.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F11",
+      "title": "OAuth state parameter contains no random nonce — token injection into arbitrary user accounts",
+      "severity": "HIGH",
+      "cwe": "CWE-330",
+      "file": "backend/app/api/v1/integrations.py",
+      "patch": "F11-oauth-hmac-state-nonce.patch",
+      "doc": "F11-oauth-hmac-state-nonce.md",
+      "note": "Addresses the same root vulnerability as F5. Apply one or the other — not both.",
+      "status": "EARNED"
+    },
+    {
+      "id": "F12",
+      "title": "IDOR: resolve_validation lookup not scoped to the route's listing_id",
+      "severity": "HIGH",
+      "cwe": "CWE-639",
+      "file": "backend/app/api/v1/listings.py",
+      "patch": "F12-resolve-validation-listing-scope.patch",
+      "doc": "F12-resolve-validation-listing-scope.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F13",
+      "title": "list_documents exposes all documents to any authenticated user — no ownership filter",
+      "severity": "HIGH",
+      "cwe": "CWE-862",
+      "file": "backend/app/api/v1/documents.py",
+      "patch": "F13-list-documents-ownership-filter.patch",
+      "doc": "F13-list-documents-ownership-filter.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F14",
+      "title": "get_document fetches any document by caller-supplied UUID with no ownership check (IDOR)",
+      "severity": "HIGH",
+      "cwe": "CWE-639",
+      "file": "backend/app/api/v1/documents.py",
+      "patch": "F14-get-document-ownership-check.patch",
+      "doc": "F14-get-document-ownership-check.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F15",
+      "title": "update_user allows a manage_users holder to escalate their own role to any higher-privilege role",
+      "severity": "HIGH",
+      "cwe": "CWE-269",
+      "file": "backend/app/api/v1/settings.py",
+      "patch": "F15-role-privilege-escalation-guard.patch",
+      "doc": "F15-role-privilege-escalation-guard.md",
+      "note": "Closes the self-escalation path only. Cross-user privilege assignment (manage_users holder promoting another account to admin) is a separate pre-existing gap tracked outside this patch set.",
+      "status": "EARNED"
+    },
+    {
+      "id": "F16",
+      "title": "COPY . . bakes .env secrets into Docker image layer — no .dockerignore present",
+      "severity": "HIGH",
+      "cwe": "CWE-312",
+      "file": "backend/Dockerfile",
+      "patch": "F16-dockerignore-env-exclusion.patch",
+      "doc": "F16-dockerignore-env-exclusion.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F17",
+      "title": "Hardcoded trivially-weak Postgres credentials committed to version control",
+      "severity": "HIGH",
+      "cwe": "CWE-798",
+      "file": "backend/docker-compose.yml",
+      "patch": "F17-parameterize-postgres-credentials.patch",
+      "doc": "F17-parameterize-postgres-credentials.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F18",
+      "title": "Refresh Token Never Revoked on Logout — Server-Side Session Remains Active",
+      "severity": "HIGH",
+      "cwe": "CWE-613",
+      "file": "frontend/src/App.tsx",
+      "patch": "F18-logout-revoke-refresh-token.patch",
+      "doc": "F18-logout-revoke-refresh-token.md",
+      "status": "EARNED"
+    },
+    {
+      "id": "F19",
+      "title": "JWT access and refresh tokens persisted in localStorage, exposed to any same-origin script",
+      "severity": "HIGH",
+      "cwe": "CWE-312",
+      "file": "frontend/src/api/client.ts",
+      "patch": "F19-tokens-in-memory-only.patch",
+      "doc": "F19-tokens-in-memory-only.md",
+      "note": "Addresses the same root vulnerability as F8. Apply one or the other — not both.",
+      "status": "EARNED"
+    }
+  ]
+}

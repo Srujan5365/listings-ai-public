@@ -1,0 +1,155 @@
+diff --git a/backend/alembic/versions/002_add_role_privilege_level.py b/backend/alembic/versions/002_add_role_privilege_level.py
+new file mode 100644
+index 0000000..68d91ba
+--- /dev/null
++++ b/backend/alembic/versions/002_add_role_privilege_level.py
+@@ -0,0 +1,40 @@
++"""Add privilege_level to roles table
++
++Revision ID: 002
++Revises: 001
++Create Date: 2024-01-02 00:00:00.000000
++
++"""
++from typing import Sequence, Union
++
++from alembic import op
++import sqlalchemy as sa
++
++revision: str = "002"
++down_revision: Union[str, None] = "001"
++branch_labels: Union[str, Sequence[str], None] = None
++depends_on: Union[str, Sequence[str], None] = None
++
++# Known seed roles and their privilege levels (higher = more privileged)
++ROLE_PRIVILEGE_LEVELS = {
++    "admin": 100,
++    "team_lead": 50,
++    "reviewer": 25,
++    "listings_coordinator": 10,
++}
++
++
++def upgrade() -> None:
++    op.add_column("roles", sa.Column("privilege_level", sa.Integer(), nullable=False, server_default="0"))
++
++    roles_table = sa.table("roles", sa.column("name", sa.String), sa.column("privilege_level", sa.Integer))
++    for role_name, level in ROLE_PRIVILEGE_LEVELS.items():
++        op.execute(
++            roles_table.update()
++            .where(roles_table.c.name == role_name)
++            .values(privilege_level=level)
++        )
++
++
++def downgrade() -> None:
++    op.drop_column("roles", "privilege_level")
+diff --git a/backend/app/api/v1/settings.py b/backend/app/api/v1/settings.py
+index 3e2af70..1524062 100644
+--- a/backend/app/api/v1/settings.py
++++ b/backend/app/api/v1/settings.py
+@@ -231,10 +231,18 @@ async def update_user(
+     if body.is_active is not None:
+         user.is_active = body.is_active
+     if body.role_name is not None:
+-        role = (await db.execute(select(Role).where(Role.name == body.role_name))).scalar_one_or_none()
+-        if not role:
++        target_role = (await db.execute(select(Role).where(Role.name == body.role_name))).scalar_one_or_none()
++        if not target_role:
+             raise HTTPException(status_code=400, detail=f"Role '{body.role_name}' not found")
+-        user.role_id = role.id
++        if user.id == current_user.id:
++            # Prevent self-escalation: block assigning a role with privilege >= caller's current level.
++            caller_role = (
++                await db.execute(select(Role).where(Role.id == current_user.role_id))
++            ).scalar_one_or_none()
++            caller_level = caller_role.privilege_level if caller_role else 0
++            if target_role.privilege_level >= caller_level:
++                raise HTTPException(status_code=403, detail="Cannot assign a role with equal or higher privilege to yourself")
++        user.role_id = target_role.id
+     user.updated_at = datetime.now(timezone.utc)
+     await db.commit()
+     return {"id": str(user.id), "email": user.email, "full_name": user.full_name, "is_active": user.is_active}
+diff --git a/backend/app/models/user.py b/backend/app/models/user.py
+index e4cd8f0..61bf3e1 100644
+--- a/backend/app/models/user.py
++++ b/backend/app/models/user.py
+@@ -5,6 +5,7 @@ from sqlalchemy import (
+     Boolean,
+     DateTime,
+     ForeignKey,
++    Integer,
+     String,
+     UniqueConstraint,
+     text,
+@@ -28,6 +29,7 @@ class Role(Base):
+     )
+     name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+     description: Mapped[str | None] = mapped_column(String, nullable=True)
++    privilege_level: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+     created_at: Mapped[datetime] = mapped_column(
+         DateTime(timezone=True), default=_now
+     )
+diff --git a/backend/tests/test_permissions.py b/backend/tests/test_permissions.py
+index d288e6c..8e89681 100644
+--- a/backend/tests/test_permissions.py
++++ b/backend/tests/test_permissions.py
+@@ -82,6 +82,58 @@ async def test_permission_required_allows_authorized(
+     assert response.status_code == 200
+ 
+ 
++async def test_self_escalation_blocked(client: AsyncClient, db_session: AsyncSession):
++    """A manage_users holder cannot assign themselves a role with equal or higher privilege."""
++    caller, pwd = await _make_user_with_role(
++        db_session,
++        role_name="team_lead",
++        permissions=["manage_users"],
++        email="teamlead@example.com",
++    )
++    # Set privilege levels: team_lead=50, admin=100
++    from sqlalchemy import select as _select
++    tl_role = (await db_session.execute(_select(Role).where(Role.name == "team_lead"))).scalar_one()
++    tl_role.privilege_level = 50
++    admin_role = Role(name="admin", description="admin", privilege_level=100)
++    db_session.add(admin_role)
++    await db_session.flush()
++
++    token = await _get_token(client, "teamlead@example.com", pwd)
++
++    resp = await client.patch(
++        f"/api/v1/settings/users/{caller.id}",
++        json={"role_name": "admin"},
++        headers={"Authorization": f"Bearer {token}"},
++    )
++    assert resp.status_code == 403
++    assert "equal or higher privilege" in resp.json()["detail"]
++
++
++async def test_self_demotion_allowed(client: AsyncClient, db_session: AsyncSession):
++    """A manage_users holder can assign themselves a strictly lower-privilege role."""
++    caller, pwd = await _make_user_with_role(
++        db_session,
++        role_name="team_lead",
++        permissions=["manage_users"],
++        email="teamlead2@example.com",
++    )
++    from sqlalchemy import select as _select
++    tl_role = (await db_session.execute(_select(Role).where(Role.name == "team_lead"))).scalar_one()
++    tl_role.privilege_level = 50
++    reviewer_role = Role(name="reviewer", description="reviewer", privilege_level=25)
++    db_session.add(reviewer_role)
++    await db_session.flush()
++
++    token = await _get_token(client, "teamlead2@example.com", pwd)
++
++    resp = await client.patch(
++        f"/api/v1/settings/users/{caller.id}",
++        json={"role_name": "reviewer"},
++        headers={"Authorization": f"Bearer {token}"},
++    )
++    assert resp.status_code == 200
++
++
+ async def test_role_permissions_seeded_correctly(db_session: AsyncSession):
+     roles = ["listings_coordinator", "team_lead", "reviewer", "admin"]
+     permissions = [

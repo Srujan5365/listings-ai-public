@@ -1,0 +1,18 @@
+diff --git a/backend/app/api/v1/integrations.py b/backend/app/api/v1/integrations.py
+index 58c5cc3..b486510 100644
+--- a/backend/app/api/v1/integrations.py
++++ b/backend/app/api/v1/integrations.py
+@@ -316,7 +316,12 @@ async def gmail_send(
+     current_user: User = _auth,
+     db: AsyncSession = Depends(get_db),
+ ):
+-    msg_result = await db.execute(select(Message).where(Message.id == message_id))
++    msg_result = await db.execute(
++        select(Message).where(
++            Message.id == message_id,
++            Message.owner_user_id == current_user.id,
++        )
++    )
+     msg = msg_result.scalar_one_or_none()
+     if msg is None:
+         raise HTTPException(status_code=404, detail="Message not found")
