@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
   CheckCircle2,
@@ -24,11 +24,13 @@ import {
   ShieldCheck,
   Upload,
 } from 'lucide-react';
+import { syncAsanaListing, gmailComposeSend } from '../../api/integrations';
 import {
-  mockListingValidations,
-  mockListingActivities,
-} from '../../data/mockData';
-import type { ListingItem } from '../../types/index';
+  fetchListingDocuments,
+  fetchListingValidations,
+  fetchListingActivity,
+} from '../../api/listings';
+import type { ListingItem, ListingValidationItem, ListingActivityItem } from '../../types/index';
 
 function calcDaysUntil(dateStr: string): string {
   try {
@@ -75,6 +77,7 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [showApprovalToast, setShowApprovalToast] = useState(false);
   const isApproved = ['Published', 'Approved'].includes(listing.status as string);
+  const [trebPublishEnabled, setTrebPublishEnabled] = useState(isApproved);
   const [readinessScore, setReadinessScore] = useState(
     isApproved ? 100 : listing.readiness ?? 87
   );
@@ -97,13 +100,35 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadedDocs, setUploadedDocs] = useState<{ id: string; title: string; format: string; pages: number; isVerified: boolean }[]>([]);
 
+  // Asana sync state
+  const [asanaState, setAsanaState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [asanaTaskUrl, setAsanaTaskUrl] = useState<string | null>(null);
+  const [asanaError, setAsanaError] = useState('');
+
+  const handleAsanaSync = async () => {
+    setAsanaState('syncing');
+    setAsanaError('');
+    try {
+      const result = await syncAsanaListing(listing.id);
+      setAsanaTaskUrl(result.asana_data.permalink_url ?? null);
+      setAsanaState('synced');
+    } catch (err: unknown) {
+      setAsanaError(err instanceof Error ? err.message : 'Asana sync failed');
+      setAsanaState('error');
+    }
+  };
+
   // Generic info toast
   const [toastMsg, setToastMsg] = useState('');
   const showMsg = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(''), 3000); };
 
   // Email composer state
-  const [emailRecipient, setEmailRecipient] = useState(true);
+  const [emailToValue, setEmailToValue] = useState(agentData.email);
   const [showCcField, setShowCcField] = useState(false);
+  const [ccValue, setCcValue] = useState('');
+  const [emailSubject, setEmailSubject] = useState(`Action Required: ${listing.address} – Missing Information`);
+  const [emailBody, setEmailBody] = useState(`Hi ${agentData.name.split(' ')[0]},\n\nWe're almost ready to publish ${listing.address}, but we're missing a few items to complete the listing. Could you please provide the following when you have a moment?\n\n1. Condo Management Information\n   - Building name and management company\n   - Monthly fees (if available)\n\n2. Property Measurements\n   - Total square footage and room dimensions (if available)\n\n3. Parking Details\n   - Number of spaces, type (owned/rented), level and spot number\n\nThank you!`);
+  const [emailSending, setEmailSending] = useState(false);
 
   const galleryImages = [
     'https://images.unsplash.com/photo-1568605117036-5fe5e7bab0b7?w=800&auto=format&fit=crop&q=80',
@@ -112,7 +137,68 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
     'https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?w=400&auto=format&fit=crop&q=80',
   ];
 
-  const baseDocuments = [
+  // DB-backed documents, validations, activity
+  const [dbDocuments, setDbDocuments] = useState<{ id: string; title: string; format: string; pages: number; isVerified: boolean }[]>([]);
+  const [dbValidations, setDbValidations] = useState<ListingValidationItem[]>([]);
+  const [dbActivity, setDbActivity] = useState<ListingActivityItem[]>([]);
+
+  useEffect(() => {
+    setSelectedDocId('doc_1');
+    fetchListingDocuments(listing.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((docs: any[]) => {
+        setDbDocuments(docs.map((d) => ({
+          id: String(d.id),
+          title: d.document_type ?? d.file_name ?? 'Document',
+          format: d.mime_type?.includes('pdf') ? 'PDF' : (d.mime_type ?? 'FILE').toUpperCase(),
+          pages: 1,
+          isVerified: d.status === 'verified' || d.status === 'received',
+        })));
+      })
+      .catch(() => {});
+
+    fetchListingValidations(listing.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((vals: any[]) => {
+        setDbValidations(vals.map((v) => ({
+          id: String(v.id),
+          field: v.field_id ?? v.rule_id ?? 'Field',
+          extractedValue: v.message ?? '',
+          sourceDoc: v.rule_id ?? '',
+          confidence: v.outcome === 'pass' ? 95 : v.outcome === 'warning' ? 70 : 50,
+          status: v.outcome === 'pass' ? 'Confirmed'
+            : v.outcome === 'fail' ? 'Conflict'
+            : v.outcome === 'warning' ? 'Review'
+            : 'Missing',
+        })));
+      })
+      .catch(() => {});
+
+    fetchListingActivity(listing.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((res: any) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setDbActivity((res.items ?? []).map((a: any) => {
+          const d = new Date(a.created_at);
+          const action: string = a.action ?? '';
+          return {
+            id: String(a.id),
+            date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+            title: action.split('.').map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
+            description: a.new_value ? JSON.stringify(a.new_value).slice(0, 80) : action,
+            user: a.user_name ?? 'System',
+            type: action.includes('approved') || action.includes('published') ? 'approved'
+              : action.includes('created') ? 'created'
+              : action.includes('document') ? 'upload'
+              : 'completed',
+          };
+        }));
+      })
+      .catch(() => {});
+  }, [listing.id]);
+
+  const baseDocuments = dbDocuments.length > 0 ? dbDocuments : [
     { id: 'doc_1', title: 'Agreement of Purchase and Sale', format: 'PDF', pages: 9, isVerified: true },
     { id: 'doc_2', title: 'MLS Listing Input Form', format: 'PDF', pages: 2, isVerified: true },
     { id: 'doc_3', title: 'Seller Property Information', format: 'PDF', pages: 4, isVerified: true },
@@ -351,18 +437,22 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
     },
   };
 
-  // Derive active document from selectedDocId — fall back to a placeholder for uploaded docs
+  // Derive active document from selectedDocId
+  // Falls back to a generic preview built from the doc's own metadata (handles DB docs with UUID IDs)
   const uploadedDocMeta = uploadedDocs.find(d => d.id === selectedDocId);
-  const activeDoc = documentDetailsMap[selectedDocId] ?? (uploadedDocMeta ? {
-    title: uploadedDocMeta.title,
-    docType: uploadedDocMeta.format,
-    format: uploadedDocMeta.format,
-    pages: uploadedDocMeta.pages,
-    isVerified: false,
-    fileName: `${uploadedDocMeta.title}.${uploadedDocMeta.format.toLowerCase()}`,
-    uploadDate: new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date()),
+  const selectedSourceDoc = sourceDocuments.find(d => d.id === selectedDocId);
+  const activeDoc = documentDetailsMap[selectedDocId] ?? (selectedSourceDoc ? {
+    title: selectedSourceDoc.title,
+    docType: selectedSourceDoc.format,
+    format: selectedSourceDoc.format,
+    pages: selectedSourceDoc.pages,
+    isVerified: selectedSourceDoc.isVerified,
+    fileName: `${selectedSourceDoc.title}.${selectedSourceDoc.format.toLowerCase()}`,
+    uploadDate: uploadedDocMeta
+      ? new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date())
+      : 'On file',
     extracted: [],
-    sections: [{ title: 'Document uploaded', content: <p className="text-[12px] text-slate-400">Processing pending.</p> }],
+    sections: [{ title: selectedSourceDoc.title, content: <p className="text-[12px] text-slate-400">Document preview not available.</p> }],
   } : documentDetailsMap['doc_1']);
 
   const extractedDataList = [
@@ -399,6 +489,7 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
     setIsConfirmModalOpen(false);
     setReadinessScore(100);
     setShowApprovalToast(true);
+    setTrebPublishEnabled(true);
     if (onApprove) onApprove();
     setTimeout(() => setShowApprovalToast(false), 4000);
   };
@@ -485,6 +576,13 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
               Listing Approved
             </span>
           )}
+          <button
+            disabled={!trebPublishEnabled}
+            onClick={() => showMsg('Publishing to TREB...')}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold shadow-xs transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-sky-600"
+          >
+            <span>Publish Listing to Treb</span>
+          </button>
           <button onClick={() => showMsg('More options coming soon.')} className="p-2 rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-600 shadow-xs transition cursor-pointer">
             <MoreHorizontal className="w-4 h-4" />
           </button>
@@ -869,12 +967,44 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
                     <span className="font-semibold text-slate-800">Asana</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[13px] text-emerald-600 font-medium bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
-                      Card Created
-                    </span>
-                    <button onClick={() => showMsg('Opening Asana task card...')} className="text-[13px] font-semibold px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition cursor-pointer">
-                      View Card
-                    </button>
+                    {asanaState === 'idle' && (
+                      <span className="text-[13px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-100">
+                        Not synced
+                      </span>
+                    )}
+                    {asanaState === 'syncing' && (
+                      <span className="text-[13px] text-blue-500 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-100">
+                        Syncing…
+                      </span>
+                    )}
+                    {asanaState === 'synced' && (
+                      <span className="text-[13px] text-emerald-600 font-medium bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100">
+                        Synced
+                      </span>
+                    )}
+                    {asanaState === 'error' && (
+                      <span className="text-[13px] text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-100" title={asanaError}>
+                        Failed
+                      </span>
+                    )}
+                    {asanaState === 'synced' && asanaTaskUrl ? (
+                      <a
+                        href={asanaTaskUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[13px] font-semibold px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        View Task
+                      </a>
+                    ) : (
+                      <button
+                        onClick={handleAsanaSync}
+                        disabled={asanaState === 'syncing'}
+                        className="text-[13px] font-semibold px-2.5 py-1 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {asanaState === 'error' ? 'Retry' : 'Sync'}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1218,7 +1348,7 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {mockListingValidations
+                {dbValidations
                   .filter(item => {
                     if (validationFilter !== 'All' && item.status !== validationFilter) return false;
                     if (validationSearch && !item.field.toLowerCase().includes(validationSearch.toLowerCase())) return false;
@@ -1396,27 +1526,33 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
             <div className="space-y-3">
               <div className="flex items-center gap-3 text-xs border-b border-slate-100 pb-3">
                 <span className="text-slate-400 w-12 shrink-0">To</span>
-                <div className="flex-1 flex items-center gap-2 flex-wrap">
-                  {emailRecipient && (
-                    <span className="flex items-center gap-1 bg-slate-100 text-slate-700 font-medium px-2.5 py-1 rounded-lg">
-                      {agentData.email}
-                      <button onClick={() => setEmailRecipient(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer"><X className="w-3 h-3" /></button>
-                    </span>
-                  )}
-                </div>
+                <input
+                  type="email"
+                  value={emailToValue}
+                  onChange={(e) => setEmailToValue(e.target.value)}
+                  placeholder="recipient@example.com"
+                  className="flex-1 text-xs text-slate-800 focus:outline-none bg-transparent placeholder-slate-400"
+                />
                 <button onClick={() => setShowCcField(v => !v)} className="text-blue-600 font-medium text-[13px] shrink-0 cursor-pointer">Cc</button>
               </div>
               {showCcField && (
                 <div className="flex items-center gap-3 text-xs border-b border-slate-100 pb-3">
                   <span className="text-slate-400 w-12 shrink-0">Cc</span>
-                  <input type="email" placeholder="Add CC recipient..." className="flex-1 text-xs text-slate-800 focus:outline-none bg-transparent placeholder-slate-400" />
+                  <input
+                    type="email"
+                    value={ccValue}
+                    onChange={(e) => setCcValue(e.target.value)}
+                    placeholder="Add CC recipient..."
+                    className="flex-1 text-xs text-slate-800 focus:outline-none bg-transparent placeholder-slate-400"
+                  />
                 </div>
               )}
               <div className="flex items-center gap-3 text-xs border-b border-slate-100 pb-3">
                 <span className="text-slate-400 w-12 shrink-0">Subject</span>
                 <input
                   type="text"
-                  defaultValue="Action Required: 123 Main Street – Missing Information"
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
                   className="flex-1 text-xs text-slate-800 font-medium focus:outline-none bg-transparent"
                 />
               </div>
@@ -1434,7 +1570,8 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
             </div>
             <textarea
               rows={10}
-              defaultValue={`Hi John,\n\nWe're almost ready to publish 123 Main Street, but we're missing a few items to complete the listing. Could you please provide the following when you have a moment?\n\n1. Condo Management Information\n   - Building name and management company\n   - Monthly fees (if available)\n\n2. Property Measurements\n   - Total square footage and room dimensions (if available)\n\n3. Parking Details\n   - Number of spaces, type (owned/rented), level and spot number\n\nThank you!\nMaría`}
+              value={emailBody}
+              onChange={(e) => setEmailBody(e.target.value)}
               className="w-full text-xs text-slate-700 leading-relaxed resize-none focus:outline-none bg-transparent border-0 p-0"
             />
             <div className="flex items-center justify-between pt-2 border-t border-slate-100">
@@ -1444,21 +1581,36 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
               </button>
               <div className="flex items-center gap-2">
                 <button onClick={() => showMsg('Email preview coming soon.')} className="px-4 py-2 text-xs font-semibold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition cursor-pointer">Preview</button>
-                <div className="flex items-center">
-                  <button
-                    onClick={() => {
-                      window.open(`mailto:${agentData.email}?subject=Action Required: Missing Information – ${listing.address}`, '_blank');
-                      showMsg('Opening email client...');
-                    }}
-                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-l-xl transition cursor-pointer"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Send Email</span>
-                  </button>
-                  <button onClick={() => showMsg('Select send options...')} className="px-2 py-2 bg-blue-700 hover:bg-blue-800 text-white rounded-r-xl border-l border-blue-500 transition cursor-pointer">
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                <button
+                  disabled={emailSending || !emailToValue.trim()}
+                  onClick={async () => {
+                    if (!emailToValue.trim()) { showMsg('Please enter a recipient email.'); return; }
+                    setEmailSending(true);
+                    try {
+                      await gmailComposeSend({
+                        to: emailToValue.trim(),
+                        cc: ccValue.trim() || undefined,
+                        subject: emailSubject,
+                        body: emailBody,
+                        listing_id: listing.id,
+                      });
+                      showMsg('Email sent successfully!');
+                    } catch (err: unknown) {
+                      const msg = err instanceof Error ? err.message : 'Send failed';
+                      if (msg.includes('not connected')) {
+                        showMsg('Gmail not connected — go to Settings → Integrations to connect.');
+                      } else {
+                        showMsg(`Send failed: ${msg}`);
+                      }
+                    } finally {
+                      setEmailSending(false);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-xl transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{emailSending ? 'Sending…' : 'Send Email'}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1526,7 +1678,7 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
             </div>
 
             <div className="space-y-4">
-              {mockListingActivities.map((act) => (
+              {dbActivity.map((act) => (
                 <div key={act.id} className="flex items-start gap-3.5">
                   <div className="w-7 h-7 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
                     {act.type === 'approved' ? (
@@ -1586,6 +1738,7 @@ export const ListingDetailView: React.FC<ListingDetailPageProps> = ({
                 {[
                   { label: 'TREB', sub: 'Not submitted', iconBg: 'bg-sky-50', iconText: 'text-sky-600', iconBorder: 'border-sky-100', abbr: 'TREB', action: 'Prepare' },
                   { label: 'FUB', sub: 'Not submitted', iconBg: 'bg-indigo-50', iconText: 'text-indigo-600', iconBorder: 'border-indigo-100', abbr: 'FD', action: 'Prepare' },
+                  { label: 'Asana', sub: 'Task created', iconBg: 'bg-rose-50', iconText: 'text-rose-500', iconBorder: 'border-rose-100', abbr: 'As', action: 'View Task' },
                   { label: 'Google Drive', sub: 'Organized', iconBg: 'bg-amber-50', iconText: 'text-amber-500', iconBorder: 'border-amber-100', abbr: null, action: 'View Folder', isFolder: true },
                   { label: 'Website', sub: 'Draft prepared', iconBg: 'bg-blue-50', iconText: 'text-blue-500', iconBorder: 'border-blue-100', abbr: null, action: 'View Draft', isGlobe: true },
                 ].map((item) => (
